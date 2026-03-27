@@ -85,6 +85,9 @@ jobs:
         FAIL2BAN_LOG=${{ secrets.FAIL2BAN_LOG }}
         EOF
 
+    - name: Remove .git for deployment
+      run: rm -rf .git
+
     - name: Copy files to server
       uses: appleboy/scp-action@v0.1.7
       with:
@@ -96,7 +99,6 @@ jobs:
         target: ${{ env.DEPLOY_PATH }}
         rm: false
         overwrite: true
-        exclude: ".git"
 
     - name: Deploy with Docker Compose
       uses: appleboy/ssh-action@v1.0.3

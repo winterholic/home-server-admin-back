@@ -109,3 +109,47 @@ FAIL2BAN_LOG      (기본: /var/log/fail2ban.log)
 ```bash
 mkdir -p /home/winterholic/projects/services/home-server-admin/backend
 ```
+
+---
+
+## CI/CD 디버깅 작업 (2026-03-28)
+
+### 발견된 문제 및 수정 내용
+
+#### 1. SCP 실패 — `.git` 디렉토리 권한 오류 ✅ 수정됨
+- **원인**: `scp-action`의 `source: "."` 이 `.git/objects` 파일까지 포함해 tar 생성 시도 → `.git/objects`는 git이 의도적으로 read-only로 관리하므로 `Permission denied`로 tar 실패
+- **수정**: `main.yml` scp 단계에 `exclude: ".git"` 추가
+- **파일**: `.github/workflows/main.yml`
+
+#### 2. DB 연결 실패 — URL 특수문자 파싱 오류 ✅ 수정됨
+- **원인**: `config.py`의 `database_url` 프로퍼티가 `db_user`/`db_password`를 URL에 그대로 삽입 → 비밀번호에 `@` 등 특수문자 포함 시 URL 파싱 오류 발생 (`@@192.168.0.3` 형태로 잘못 파싱됨)
+- **수정**: `urllib.parse.quote_plus`로 user/password 인코딩 후 URL 조합
+- **파일**: `app/config.py`
+- **추가 확인 필요**: GitHub Secret `DB_HOST` 값이 `192.168.0.3` 형태인지 확인 (앞에 `@` 붙어있으면 제거)
+
+#### 3. 헬스체크 실패 시 컨테이너 소멸 문제 ✅ 수정됨
+- **원인**: `deploy.sh` 헬스체크 실패 경로에서 `docker compose down` 호출 → 컨테이너가 완전히 제거되어 `docker ps -a`에서도 안 보임 (디버깅 불가)
+- **수정**: 실패 시 `docker compose down` 제거, 대신 로그 100줄 + `docker compose ps -a` 출력 후 `exit 1`
+- **파일**: `scripts/deploy.sh`
+
+#### 4. `docker image prune -f` 추가 ✅ 수정됨
+- **백엔드**: `scripts/deploy.sh` 배포 성공 후 실행 (기존엔 `main.yml` Cleanup 스텝에만 있었음)
+- **프론트엔드**: `deploy.yml` Deploy 스텝에 추가, `docker compose up -d --build` → `docker compose build --no-cache` + `docker compose up -d` 로 분리
+
+#### 5. `.dockerignore` 신규 생성 ✅ 완료
+- `venv/`, `.omc/`, `.git/`, `__pycache__`, `docs/`, `tests/` 등 제외
+- **파일**: `.dockerignore`
+
+### 현재 상태
+- SCP 실패 문제는 수정 완료, 아직 재배포 미완료
+- DB URL 파싱 문제 수정 완료, 아직 검증 안됨
+- 다음 세션에서 커밋/푸시 후 GitHub Actions 재실행하여 확인 필요
+
+### 수정된 파일 목록
+| 파일 | 변경 내용 |
+|------|----------|
+| `.github/workflows/main.yml` | SCP `exclude: ".git"` 추가 |
+| `app/config.py` | `quote_plus` import 및 DB URL 인코딩 적용 |
+| `scripts/deploy.sh` | 헬스체크 실패 시 `docker compose down` 제거, `docker image prune -f` 추가 |
+| `.dockerignore` | 신규 생성 |
+| `home-server-admin-front/.github/workflows/deploy.yml` | `docker compose build --no-cache` 분리, `docker image prune -f` 추가 |
