@@ -96,6 +96,7 @@ jobs:
         target: ${{ env.DEPLOY_PATH }}
         rm: false
         overwrite: true
+        exclude: ".git"
 
     - name: Deploy with Docker Compose
       uses: appleboy/ssh-action@v1.0.3
