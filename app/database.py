@@ -1,6 +1,9 @@
+import logging
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -8,6 +11,8 @@ class Base(DeclarativeBase):
 
 
 settings = get_settings()
+
+logger.info("DB connecting → host=%s port=%s db=%s user=%s", settings.db_host, settings.db_port, settings.db_name, settings.db_user)
 
 engine = create_async_engine(
     settings.database_url,
