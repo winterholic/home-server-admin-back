@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+from urllib.parse import quote_plus
 
 
 class Settings(BaseSettings):
@@ -39,14 +40,14 @@ class Settings(BaseSettings):
     @property
     def database_url(self) -> str:
         return (
-            f"mysql+aiomysql://{self.db_user}:{self.db_password}"
+            f"mysql+aiomysql://{quote_plus(self.db_user)}:{quote_plus(self.db_password)}"
             f"@{self.db_host}:{self.db_port}/{self.db_name}"
         )
 
     @property
     def database_url_sync(self) -> str:
         return (
-            f"mysql+pymysql://{self.db_user}:{self.db_password}"
+            f"mysql+pymysql://{quote_plus(self.db_user)}:{quote_plus(self.db_password)}"
             f"@{self.db_host}:{self.db_port}/{self.db_name}"
         )
 

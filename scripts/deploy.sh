@@ -61,8 +61,9 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
     if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
         echo -e "${RED}✗${NC} 헬스체크 실패! 배포를 중단합니다."
         echo -e "\n${RED}컨테이너 로그:${NC}"
-        docker compose logs --tail 50 app
-        docker compose down
+        docker compose logs --tail 100 app
+        echo -e "\n${RED}컨테이너 상태:${NC}"
+        docker compose ps -a
         exit 1
     fi
 
@@ -70,6 +71,10 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
 done
 
 echo ""
+echo ""
+echo -e "${BLUE}[4/4 완료]${NC} 오래된 Docker 이미지 정리 중..."
+docker image prune -f
+
 mkdir -p logs
 DEPLOY_LOG="logs/deploy.log"
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Docker Compose deployment completed" >> $DEPLOY_LOG
