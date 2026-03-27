@@ -1,0 +1,140 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1771682797933,
+  "projectRoot": "F:\\mydevelop\\home-server-admin\\home-server-admin-back",
+  "techStack": {
+    "languages": [
+      {
+        "name": "Python",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "requirements.txt"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": "pip",
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": "snake_case",
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "app",
+      "docs"
+    ],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "app": {
+      "path": "app",
+      "purpose": "Application code",
+      "fileCount": 4,
+      "lastAccessed": 1771682797915,
+      "keyFiles": [
+        "config.py",
+        "database.py",
+        "main.py",
+        "__init__.py"
+      ]
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 2,
+      "lastAccessed": 1771682797916,
+      "keyFiles": [
+        "design-guide.md",
+        "plan-guide.md"
+      ]
+    },
+    "venv": {
+      "path": "venv",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1771682797916,
+      "keyFiles": [
+        "pyvenv.cfg"
+      ]
+    },
+    "app\\models": {
+      "path": "app\\models",
+      "purpose": "Data models",
+      "fileCount": 5,
+      "lastAccessed": 1771682797917,
+      "keyFiles": [
+        "alert.py",
+        "log.py",
+        "monitoring.py"
+      ]
+    },
+    "app\\schemas": {
+      "path": "app\\schemas",
+      "purpose": "Schema definitions",
+      "fileCount": 6,
+      "lastAccessed": 1771682797917,
+      "keyFiles": [
+        "alert.py",
+        "log.py",
+        "service.py"
+      ]
+    },
+    "app\\services": {
+      "path": "app\\services",
+      "purpose": "Business logic services",
+      "fileCount": 5,
+      "lastAccessed": 1771682797917,
+      "keyFiles": [
+        "log_analyzer.py",
+        "monitor.py",
+        "notification.py"
+      ]
+    },
+    "app\\utils": {
+      "path": "app\\utils",
+      "purpose": "Utility functions",
+      "fileCount": 3,
+      "lastAccessed": 1771682797917,
+      "keyFiles": [
+        "email.py",
+        "system_info.py",
+        "__init__.py"
+      ]
+    },
+    "venv\\Lib": {
+      "path": "venv\\Lib",
+      "purpose": "Library code",
+      "fileCount": 0,
+      "lastAccessed": 1771682797918,
+      "keyFiles": []
+    },
+    "venv\\Scripts": {
+      "path": "venv\\Scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 16,
+      "lastAccessed": 1771682797918,
+      "keyFiles": [
+        "activate",
+        "activate.bat",
+        "Activate.ps1"
+      ]
+    }
+  },
+  "hotPaths": [],
+  "userDirectives": []
+}
