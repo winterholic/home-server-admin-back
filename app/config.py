@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = ""
     smtp_tls: bool = True
+    email_recipient: str = ""
 
     monitor_interval: int = 300
     data_retention_days: int = 30

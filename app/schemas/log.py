@@ -36,3 +36,17 @@ class TimelineBucket(BaseModel):
 
 class LogTimelineResponse(BaseModel):
     timeline: list[TimelineBucket]
+
+
+class AccessIpEntry(BaseModel):
+    ip: str
+    count: int
+    last_seen: str
+    paths: list[str]
+    status_codes: list[int]
+    suspicious: bool = False
+
+
+class AccessIpsResponse(BaseModel):
+    recent: list[AccessIpEntry]
+    total_unique: int

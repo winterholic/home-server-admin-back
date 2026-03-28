@@ -4,10 +4,11 @@ from sqlalchemy import select, desc, func
 from datetime import datetime, timedelta
 from app.database import get_db
 from app.models.log import LogHistory
-from app.services.log_analyzer import get_log_statistics
+from app.services.log_analyzer import get_log_statistics, get_access_ips
 from app.schemas.log import (
     LogEntry, LogListResponse, LogStatistics,
     LogTimelineResponse, TimelineBucket,
+    AccessIpsResponse,
 )
 
 router = APIRouter(prefix="/api/logs", tags=["Log Management"])
@@ -18,7 +19,7 @@ async def get_recent_logs(
     source: str | None = Query(None),
     severity: str | None = Query(None),
     log_type: str | None = Query(None),
-    limit: int = Query(50, le=200),
+    limit: int = Query(50, le=500),
     offset: int = Query(0),
     db: AsyncSession = Depends(get_db),
 ):
@@ -119,3 +120,18 @@ async def get_log_timeline(
             bucket.bruteforce += 1
 
     return LogTimelineResponse(timeline=list(buckets.values()))
+
+
+@router.get("/access-ips", response_model=AccessIpsResponse)
+async def get_access_ips_endpoint(
+    hours: int = Query(24, ge=1, le=168),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """Return recent nginx access log IPs aggregated by count."""
+    from app.config import get_settings
+    settings = get_settings()
+    result = get_access_ips(settings.nginx_access_log, hours=hours, limit=limit)
+    return AccessIpsResponse(
+        recent=result["recent"],
+        total_unique=result["total_unique"],
+    )

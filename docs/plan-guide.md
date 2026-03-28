@@ -561,13 +561,42 @@ WantedBy=multi-user.target
 
 ## 12. 향후 확장 가능성
 
-- Docker 컨테이너 모니터링
+- Docker 컨테이너 모니터링 ✅ (부분 구현 - 상태 및 로그 조회)
 - 네트워크 트래픽 상세 분석
 - 백업 자동화 관리
 - 데이터베이스(MariaDB) 쿼리 모니터링
 - Redis 메트릭 수집
 - 모바일 앱 연동 (선택)
 - Webhook 알림 (Discord, Slack 등)
+- **IP 접속 현황 탭** (계획 중 - nginx access.log 파싱)
+
+---
+
+## 13. 변경 이력
+
+### 2026-03-28
+
+#### 버그 수정
+- `/api/logs/recent` 422 오류: `limit` 최대값 200 → 500 (`app/routers/logs.py`)
+- 디스크 중복 표시: `_is_real_partition()` 필터로 가상 파일시스템(tmpfs, overlay 등) 제외 (`app/services/monitor.py`)
+- 서비스 상태 미표시 (핵심): `get_all_services()`를 `asyncio.to_thread()` + systemctl 일괄 조회로 최적화 (`app/services/service_manager.py`)
+  - 기존: 서비스마다 systemctl 개별 호출(N회) → 이벤트 루프 블로킹 → 프론트 타임아웃
+  - 변경: 2회 일괄 호출 (`list-units` + `show --property=...`)
+
+#### 기능 추가
+- 서비스 로그 API에 docker 컨테이너 지원: `service_type=docker` 파라미터 (`app/routers/services.py`)
+- 이메일 수신자 설정: `PUT /api/settings/email-recipient` 엔드포인트 추가
+  - SMTP 자격증명은 `.env` 관리, UI에서는 수신 이메일만 설정
+  - 알림 발송 시 per-alert 수신자 없으면 글로벌 수신자 fallback (`app/services/notification.py`)
+
+#### 스키마 변경
+- `AppSettingsResponse`에 `email_recipient: str` 필드 추가 (`app/schemas/settings.py`)
+- `EmailRecipientRequest` 스키마 신규 추가
+- `Settings`에 `email_recipient: str = ""` 기본값 추가 (`app/config.py`)
+
+#### 미완료 (다음 세션)
+- IP 접속 현황 탭 (`GET /api/logs/access-ips` 엔드포인트 신규 필요)
+- 서비스 관리 고도화 (nohup restart, 타입별 아이콘)
 
 ---
 

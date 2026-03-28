@@ -7,15 +7,16 @@ from app.config import get_settings
 from app.models.settings import AppConfig
 from app.schemas.settings import (
     AppSettingsResponse,
+    EmailRecipientRequest,
     SmtpSettingsRequest,
     MonitoringSettingsRequest,
     SmtpTestResponse,
 )
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/settings", tags=["Settings"])
 
-# Keys stored in app_config table for overridable settings
-_SMTP_KEYS = ("smtp_host", "smtp_port", "smtp_user", "smtp_password", "smtp_from", "smtp_tls")
+_SMTP_KEYS = ("smtp_host", "smtp_port", "smtp_user", "smtp_password", "smtp_from", "smtp_tls", "email_recipient")
 _MONITOR_KEYS = ("monitor_interval", "data_retention_days")
 
 
@@ -59,11 +60,23 @@ async def get_app_settings(db: AsyncSession = Depends(get_db)):
         smtp_user=_str("smtp_user", base.smtp_user),
         smtp_from=_str("smtp_from", base.smtp_from),
         smtp_tls=_bool("smtp_tls", base.smtp_tls),
+        email_recipient=_str("email_recipient", base.email_recipient),
         monitor_interval=_int("monitor_interval", base.monitor_interval),
         data_retention_days=_int("data_retention_days", base.data_retention_days),
         systemd_services=base.systemd_service_list,
         docker_containers=base.docker_container_list,
     )
+
+
+@router.put("/email-recipient", response_model=AppSettingsResponse)
+async def update_email_recipient(
+    body: EmailRecipientRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Set the global alert recipient email address."""
+    await _upsert(db, "email_recipient", body.email_recipient.strip())
+    await db.commit()
+    return await get_app_settings(db)
 
 
 @router.put("/smtp", response_model=AppSettingsResponse)
@@ -129,15 +142,18 @@ async def test_smtp_connection(
     password = body.smtp_password or ""
     from_addr = body.smtp_from or current.smtp_from or user
     tls = body.smtp_tls if body.smtp_tls is not None else current.smtp_tls
+    recipient = current.email_recipient or user
 
     if not user:
         return SmtpTestResponse(success=False, message="SMTP user not configured")
     if not password:
         return SmtpTestResponse(success=False, message="SMTP password not provided for test")
+    if not recipient:
+        return SmtpTestResponse(success=False, message="Recipient email not configured")
 
     msg = MIMEMultipart()
     msg["From"] = from_addr
-    msg["To"] = user
+    msg["To"] = recipient
     msg["Subject"] = "[NodeCtrl] SMTP Test"
     msg.attach(MIMEText("SMTP configuration is working correctly.", "plain"))
 

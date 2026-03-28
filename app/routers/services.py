@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Query
-from app.services.service_manager import get_all_services, control_service, get_service_logs
+from app.services.service_manager import get_all_services, control_service, get_service_logs, get_docker_logs
 from app.schemas.service import (
     ServiceListResponse, ServiceSummary,
     ServiceControlRequest, ServiceControlResponse,
@@ -38,6 +38,10 @@ async def control_service_endpoint(service_name: str, request: ServiceControlReq
 async def get_service_log_lines(
     service_name: str,
     lines: int = Query(50, ge=1, le=200),
+    service_type: str | None = Query(None),
 ):
-    log_lines = get_service_logs(service_name, lines)
+    if service_type == "docker":
+        log_lines = get_docker_logs(service_name, lines)
+    else:
+        log_lines = get_service_logs(service_name, lines)
     return ServiceLogsResponse(service_name=service_name, lines=log_lines)

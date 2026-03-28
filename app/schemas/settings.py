@@ -1,6 +1,10 @@
 from pydantic import BaseModel
 
 
+class EmailRecipientRequest(BaseModel):
+    email_recipient: str
+
+
 class SmtpSettingsRequest(BaseModel):
     smtp_host: str | None = None
     smtp_port: int | None = None
@@ -21,6 +25,7 @@ class AppSettingsResponse(BaseModel):
     smtp_user: str
     smtp_from: str
     smtp_tls: bool
+    email_recipient: str
     monitor_interval: int
     data_retention_days: int
     systemd_services: list[str]

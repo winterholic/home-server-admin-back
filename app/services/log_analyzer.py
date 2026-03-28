@@ -328,3 +328,78 @@ async def get_log_statistics(db: AsyncSession, hours: int = 24) -> LogStatistics
         by_type=by_type,
         by_severity=by_severity,
     )
+
+
+def get_access_ips(
+    log_path: str,
+    hours: int = 24,
+    limit: int = 100,
+    suspicious_threshold: int = 50,
+) -> dict:
+    """
+    Read nginx access.log and aggregate recent access by IP.
+    Returns dict with 'recent' list and 'total_unique' count.
+    """
+    if not os.path.exists(log_path):
+        return {"recent": [], "total_unique": 0}
+
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    ip_data: dict[str, dict] = {}
+
+    try:
+        with open(log_path, "r", errors="ignore") as fh:
+            stat = os.fstat(fh.fileno())
+            size = stat.st_size
+            if size > 50 * 1024 * 1024:
+                fh.seek(size - 50 * 1024 * 1024)
+                fh.readline()  # skip partial line
+
+            for line in fh:
+                m = NGINX_ACCESS_PATTERN.search(line)
+                if not m:
+                    continue
+                ip, ts_str, method, path, status_code, _ = m.groups()
+                ts = _parse_nginx_access_ts(ts_str)
+                if ts < cutoff:
+                    continue
+
+                status = int(status_code)
+                if ip not in ip_data:
+                    ip_data[ip] = {
+                        "ip": ip,
+                        "count": 0,
+                        "last_seen": ts,
+                        "paths": [],
+                        "path_set": set(),
+                        "status_codes": set(),
+                    }
+
+                d = ip_data[ip]
+                d["count"] += 1
+                if ts > d["last_seen"]:
+                    d["last_seen"] = ts
+                if path not in d["path_set"] and len(d["paths"]) < 10:
+                    d["path_set"].add(path)
+                    d["paths"].append(path)
+                d["status_codes"].add(status)
+
+    except (PermissionError, OSError):
+        return {"recent": [], "total_unique": 0}
+
+    sorted_ips = sorted(ip_data.values(), key=lambda x: x["count"], reverse=True)
+
+    result = []
+    for d in sorted_ips[:limit]:
+        result.append({
+            "ip": d["ip"],
+            "count": d["count"],
+            "last_seen": d["last_seen"].isoformat(),
+            "paths": d["paths"],
+            "status_codes": sorted(d["status_codes"]),
+            "suspicious": d["count"] >= suspicious_threshold,
+        })
+
+    return {
+        "recent": result,
+        "total_unique": len(ip_data),
+    }

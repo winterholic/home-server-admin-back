@@ -3,13 +3,22 @@ from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.models.alert import AlertSetting, AlertHistory
+from app.models.settings import AppConfig
 from app.services.monitor import collect_system_status
 from app.utils.email import send_alert_email
 
 logger = logging.getLogger(__name__)
 
-# Minimum minutes between repeated alerts for the same metric type.
 ALERT_COOLDOWN_MINUTES = 30
+
+
+async def _get_global_recipient(db: AsyncSession) -> str | None:
+    result = await db.execute(
+        select(AppConfig).where(AppConfig.key == "email_recipient")
+    )
+    row = result.scalar_one_or_none()
+    val = row.value if row else None
+    return val.strip() if val and val.strip() else None
 
 
 async def check_alerts(db: AsyncSession) -> list[dict]:
@@ -23,13 +32,14 @@ async def check_alerts(db: AsyncSession) -> list[dict]:
     if not settings_list:
         return []
 
-    # Pre-fetch alert types that fired within the cooldown window to avoid spam.
     cooldown_since = datetime.utcnow() - timedelta(minutes=ALERT_COOLDOWN_MINUTES)
     recent_result = await db.execute(
         select(AlertHistory.alert_type)
         .where(AlertHistory.timestamp >= cooldown_since)
     )
     recent_alert_types: set[str] = {row[0] for row in recent_result.all()}
+
+    global_recipient = await _get_global_recipient(db)
 
     metric_values = {
         "cpu": status.cpu.percent,
@@ -47,7 +57,6 @@ async def check_alerts(db: AsyncSession) -> list[dict]:
 
         alert_type = f"{setting.metric_type}_high"
 
-        # Skip if already alerted within the cooldown window.
         if alert_type in recent_alert_types:
             logger.debug(
                 "Alert '%s' suppressed (cooldown %d min)", alert_type, ALERT_COOLDOWN_MINUTES
@@ -67,12 +76,14 @@ async def check_alerts(db: AsyncSession) -> list[dict]:
             sent_email=False,
         )
         db.add(alert)
-
-        # Add to in-memory set so later iterations in the same batch respect cooldown.
         recent_alert_types.add(alert_type)
 
-        recipients = setting.email_recipients or []
-        if isinstance(recipients, list) and recipients:
+        # Use per-alert recipients if set, otherwise fall back to global recipient
+        recipients: list[str] = setting.email_recipients or []
+        if not recipients and global_recipient:
+            recipients = [global_recipient]
+
+        if recipients:
             try:
                 await send_alert_email(
                     recipients=recipients,
