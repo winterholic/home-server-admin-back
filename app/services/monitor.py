@@ -1,3 +1,7 @@
+import json
+import os
+import re
+import subprocess
 import psutil
 import time
 from datetime import datetime
@@ -11,7 +15,7 @@ from app.schemas.system import (
 _prev_net: dict | None = None
 _prev_net_time: float = 0
 
-# Filesystem types that are virtual/pseudo and should not be shown as disk partitions
+# Filesystem types that are virtual/pseudo — skip these
 _SKIP_FSTYPES = frozenset({
     'tmpfs', 'devtmpfs', 'devfs', 'iso9660', 'squashfs',
     'overlay', 'aufs', 'proc', 'sysfs', 'cgroup', 'cgroup2',
@@ -23,18 +27,77 @@ _SKIP_FSTYPES = frozenset({
 
 def _is_real_partition(part: psutil._common.sdiskpart) -> bool:
     """Return True only for real physical/logical disk partitions."""
-    if part.fstype in _SKIP_FSTYPES:
+    if part.fstype in _SKIP_FSTYPES or not part.fstype:
         return False
-    if not part.fstype:
-        return False
-    # Skip snap, docker, sys, proc bind mounts
     skip_prefixes = ('/snap/', '/sys/', '/proc/', '/dev/', '/run/')
     if any(part.mountpoint.startswith(p) for p in skip_prefixes):
         return False
-    # Skip virtual block devices
     if part.device in ('udev', 'tmpfs', 'none', 'overlay'):
         return False
     return True
+
+
+def _get_physical_disk_types() -> dict[str, dict]:
+    """
+    Run lsblk to get physical disk info (not partitions).
+    Returns {disk_basename: {"disk_type": "ssd"|"hdd"|"unknown", "label": str, "size_bytes": int}}
+    """
+    try:
+        result = subprocess.run(
+            ["lsblk", "-d", "-o", "NAME,ROTA,SIZE,MODEL", "-b", "--json"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return {}
+        data = json.loads(result.stdout)
+        disks: dict[str, dict] = {}
+        for dev in data.get("blockdevices", []):
+            name = str(dev.get("name") or "")
+            rota = str(dev.get("rota") or "1")
+            size = int(dev.get("size") or 0)
+            model = str(dev.get("model") or "").strip()
+            if not name:
+                continue
+            disks[name] = {
+                "disk_type": "ssd" if rota == "0" else "hdd",
+                "label": model or name.upper(),
+                "size_bytes": size,
+            }
+        return disks
+    except Exception:
+        return {}
+
+
+def _get_parent_disk_name(device: str) -> str:
+    """
+    Map a partition device path to its parent physical disk name.
+
+    Examples:
+      /dev/nvme0n1p3 -> nvme0n1
+      /dev/sda1      -> sda
+      /dev/mmcblk0p1 -> mmcblk0
+      /dev/sdb       -> sdb   (already a disk, no change)
+    """
+    base = os.path.basename(device)
+
+    # NVMe: nvme0n1p1 -> nvme0n1
+    m = re.match(r'^(nvme\d+n\d+)p\d+$', base)
+    if m:
+        return m.group(1)
+
+    # eMMC/SD: mmcblk0p1 -> mmcblk0
+    m = re.match(r'^(mmcblk\d+)p\d+$', base)
+    if m:
+        return m.group(1)
+
+    # SATA/IDE/virtio: sda1, vda2, hda3 -> sda, vda, hda
+    m = re.match(r'^([a-z]+(?:da|db|dc|dd|de|df|dg|dh|di|dj|dk))\d+$', base)
+    if m:
+        return m.group(1)
+
+    # Generic fallback: strip trailing digits
+    stripped = re.sub(r'\d+$', '', base)
+    return stripped if stripped else base
 
 
 def collect_system_status() -> SystemStatusResponse:
@@ -46,29 +109,76 @@ def collect_system_status() -> SystemStatusResponse:
     mem = psutil.virtual_memory()
     swap = psutil.swap_memory()
 
-    disks = []
+    # ── Disk: aggregate partitions by physical disk ───────────────────────────
+    disk_type_map = _get_physical_disk_types()   # {disk_name: {disk_type, label, size_bytes}}
+
     seen_mountpoints: set[str] = set()
+    disk_aggregates: dict[str, dict] = {}        # {disk_name: aggregate info}
+
     for part in psutil.disk_partitions(all=True):
         if not _is_real_partition(part):
             continue
-        # Deduplicate by mountpoint
         if part.mountpoint in seen_mountpoints:
             continue
         seen_mountpoints.add(part.mountpoint)
+
         try:
             usage = psutil.disk_usage(part.mountpoint)
-            disks.append(DiskPartition(
-                mountpoint=part.mountpoint,
-                device=part.device,
-                fstype=part.fstype,
-                total=usage.total,
-                used=usage.used,
-                free=usage.free,
-                percent=usage.percent,
-            ))
         except (PermissionError, OSError):
             continue
 
+        disk_name = _get_parent_disk_name(part.device)
+        disk_info = disk_type_map.get(disk_name) or {
+            "disk_type": "unknown",
+            "label": disk_name.upper(),
+            "size_bytes": 0,
+        }
+
+        if disk_name not in disk_aggregates:
+            disk_aggregates[disk_name] = {
+                "disk_type": disk_info["disk_type"],
+                "label": disk_info["label"],
+                "size_bytes": disk_info["size_bytes"],
+                "used": 0,
+                "free": 0,
+                "primary_mountpoint": part.mountpoint,
+                "primary_device": part.device,
+                "primary_fstype": part.fstype,
+            }
+
+        agg = disk_aggregates[disk_name]
+        agg["used"] += usage.used
+        agg["free"] += usage.free
+        # Prefer root mountpoint as the representative mountpoint
+        if part.mountpoint == "/":
+            agg["primary_mountpoint"] = "/"
+            agg["primary_device"] = part.device
+            agg["primary_fstype"] = part.fstype
+
+    # Build final DiskPartition list (one entry per physical disk)
+    disks: list[DiskPartition] = []
+    for disk_name, agg in disk_aggregates.items():
+        total = agg["size_bytes"] or (agg["used"] + agg["free"])
+        if total <= 0:
+            total = agg["used"] + agg["free"]
+        percent = round(agg["used"] / total * 100, 1) if total > 0 else 0.0
+        disks.append(DiskPartition(
+            mountpoint=agg["primary_mountpoint"],
+            device=f"/dev/{disk_name}",
+            fstype=agg["primary_fstype"],
+            total=total,
+            used=agg["used"],
+            free=agg["free"],
+            percent=percent,
+            disk_type=agg["disk_type"],
+            label=agg["label"],
+        ))
+
+    # Sort: SSD first, HDD second, unknown last
+    _order = {"ssd": 0, "hdd": 1, "unknown": 2}
+    disks.sort(key=lambda d: _order.get(d.disk_type, 2))
+
+    # ── Network ───────────────────────────────────────────────────────────────
     net = psutil.net_io_counters()
     now = time.time()
     rx_speed = 0.0
@@ -104,6 +214,9 @@ def collect_system_status() -> SystemStatusResponse:
 
 async def save_monitoring_snapshot(db: AsyncSession) -> MonitoringHistory:
     status = collect_system_status()
+
+    # Use the primary disk (SSD or first entry) for the snapshot metric
+    primary_disk_percent = status.disk[0].percent if status.disk else 0.0
 
     record = MonitoringHistory(
         timestamp=datetime.utcnow(),

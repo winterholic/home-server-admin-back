@@ -95,6 +95,9 @@ async def _read_new_lines(filepath: str, db: AsyncSession, source_key: str) -> l
     """
     Read only the lines added to *filepath* since the last call.
     Uses inode + byte offset stored in AppConfig to handle log rotation.
+
+    On the very first read (offset == 0) for large files, starts from the last
+    2 MB so that we process *recent* entries rather than ancient ones.
     Returns an empty list if the file is missing or unreadable.
     """
     if not os.path.exists(filepath):
@@ -104,18 +107,28 @@ async def _read_new_lines(filepath: str, db: AsyncSession, source_key: str) -> l
         current_inode = stat.st_ino
         current_size = stat.st_size
 
+        if current_size == 0:
+            return []
+
         stored_inode, stored_offset = await _get_file_state(db, source_key)
 
-        # File rotated or shrunk (e.g. logrotate)
+        # File rotated or shrunk (e.g. logrotate) — reset to beginning
         if stored_inode != current_inode or stored_offset > current_size:
             stored_offset = 0
+
+        # On first access of a large file, jump to the last 2 MB so we collect
+        # recent entries immediately instead of processing MB of old history.
+        INITIAL_TAIL = 2 * 1024 * 1024  # 2 MB
+        if stored_offset == 0 and current_size > INITIAL_TAIL:
+            stored_offset = current_size - INITIAL_TAIL
 
         if stored_offset >= current_size:
             return []  # Nothing new
 
         with open(filepath, "r", errors="ignore") as fh:
             fh.seek(stored_offset)
-            # Cap single read to 2 MB to avoid blocking
+            if stored_offset > 0:
+                fh.readline()  # Skip the potentially partial first line
             chunk = fh.read(2 * 1024 * 1024)
             new_offset = fh.tell()
 

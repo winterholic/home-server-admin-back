@@ -19,67 +19,10 @@ def _run_cmd(cmd: list[str], timeout: int = 10) -> tuple[int, str, str]:
         return -1, "", f"Command not found: {cmd[0]}"
 
 
-# ── Systemd (batched) ──────────────────────────────────────────────────────────
+# ── Systemd ───────────────────────────────────────────────────────────────────
 
-def _systemctl_path() -> str:
-    """Return the full path to systemctl, falling back to bare name."""
-    return shutil.which("systemctl") or "systemctl"
-
-
-def _get_systemd_services_batch() -> list[ServiceInfo]:
-    """Return all systemd service statuses using at most 2 systemctl calls."""
-    systemctl = _systemctl_path()
-    code, stdout, stderr = _run_cmd([
-        systemctl, "list-units", "--type=service",
-        "--all", "--no-pager", "--plain", "--no-legend",
-    ])
-    if code != 0 or not stdout:
-        logger.warning("systemctl list-units failed (code=%d): %s", code, stderr)
-        return []
-
-    service_units: list[str] = []
-    for line in stdout.splitlines():
-        parts = line.split()
-        if parts and parts[0].endswith(".service"):
-            service_units.append(parts[0])
-
-    if not service_units:
-        logger.warning("systemctl list-units returned no .service units")
-        return []
-
-    # Batch into chunks to avoid arg-list-too-long errors (ARG_MAX)
-    CHUNK = 50
-    services: list[ServiceInfo] = []
-    props_str = "Id,ActiveState,MainPID,MemoryCurrent,Description,ActiveEnterTimestamp"
-    for i in range(0, len(service_units), CHUNK):
-        chunk = service_units[i:i + CHUNK]
-        code, stdout, stderr = _run_cmd(
-            [systemctl, "show", "--no-pager", f"--property={props_str}"] + chunk,
-            timeout=15,
-        )
-        if code != 0:
-            logger.warning("systemctl show failed (code=%d): %s", code, stderr)
-            continue
-        services.extend(_parse_show_output(stdout))
-
-    return services
-
-
-def _parse_show_output(stdout: str) -> list[ServiceInfo]:
-    """Parse 'systemctl show' output (blocks separated by blank lines)."""
-    result: list[ServiceInfo] = []
-    current: dict[str, str] = {}
-    for line in stdout.splitlines():
-        if not line.strip():
-            if current.get("Id"):
-                result.append(_props_to_service_info(current))
-            current = {}
-        elif "=" in line:
-            k, v = line.split("=", 1)
-            current[k.strip()] = v.strip()
-    if current.get("Id"):
-        result.append(_props_to_service_info(current))
-    return result
+def _systemctl_path() -> str | None:
+    return shutil.which("systemctl")
 
 
 def _props_to_service_info(props: dict[str, str]) -> ServiceInfo:
@@ -111,10 +54,56 @@ def _props_to_service_info(props: dict[str, str]) -> ServiceInfo:
     )
 
 
+def _get_configured_systemd_services(names: list[str]) -> list[ServiceInfo]:
+    """
+    Check each configured systemd service individually.
+    Falls back gracefully if systemctl is not available.
+    """
+    systemctl = _systemctl_path()
+    if not systemctl:
+        logger.info("systemctl not found — skipping systemd services")
+        return []
+
+    props_str = "Id,ActiveState,MainPID,MemoryCurrent,Description,ActiveEnterTimestamp"
+    services: list[ServiceInfo] = []
+
+    for name in names:
+        unit = name if name.endswith(".service") else f"{name}.service"
+        code, stdout, _ = _run_cmd(
+            [systemctl, "show", unit, f"--property={props_str}", "--no-pager"],
+            timeout=5,
+        )
+
+        props: dict[str, str] = {}
+        if code == 0 and stdout:
+            for line in stdout.splitlines():
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    props[k.strip()] = v.strip()
+
+        if not props or not props.get("Id"):
+            # Unit not found — show as inactive so user knows it's configured but missing
+            services.append(ServiceInfo(
+                name=name,
+                type="systemd",
+                description=f"systemd service (not found)",
+                status="inactive",
+                uptime="-",
+                memory=0,
+                memory_percent=0.0,
+                pid=None,
+            ))
+        else:
+            services.append(_props_to_service_info(props))
+
+    return services
+
+
 def control_systemd_service(service_name: str, action: str) -> ServiceControlResponse:
     if action not in ("start", "stop", "restart", "reload"):
         return ServiceControlResponse(success=False, message=f"Invalid action: {action}")
-    code, stdout, stderr = _run_cmd(["sudo", "systemctl", action, service_name])
+    systemctl = _systemctl_path() or "systemctl"
+    code, stdout, stderr = _run_cmd(["sudo", systemctl, action, service_name])
     return ServiceControlResponse(
         success=code == 0,
         message=stdout if code == 0 else stderr,
@@ -122,9 +111,11 @@ def control_systemd_service(service_name: str, action: str) -> ServiceControlRes
 
 
 def get_service_logs(service_name: str, lines: int = 50) -> list[str]:
-    """Return the last *lines* journal log entries for a systemd service."""
+    journalctl = shutil.which("journalctl")
+    if not journalctl:
+        return [f"journalctl not available"]
     code, stdout, stderr = _run_cmd(
-        ["journalctl", "-u", service_name, "-n", str(lines), "--no-pager", "--output=short"]
+        [journalctl, "-u", service_name, "-n", str(lines), "--no-pager", "--output=short"]
     )
     if code != 0:
         return [stderr] if stderr else []
@@ -139,15 +130,19 @@ def _docker_available() -> bool:
 
 def get_docker_containers(filter_names: list[str] | None = None) -> list[ServiceInfo]:
     if not _docker_available():
+        logger.info("docker not found — skipping Docker containers")
         return []
 
     fmt = '{{.ID}}\t{{.Names}}\t{{.Status}}\t{{.State}}\t{{.Image}}'
-    code, stdout, _ = _run_cmd(["docker", "ps", "-a", "--format", fmt])
-    if code != 0 or not stdout:
+    code, stdout, stderr = _run_cmd(["docker", "ps", "-a", "--format", fmt])
+    if code != 0:
+        logger.warning("docker ps failed (code=%d): %s", code, stderr)
+        return []
+    if not stdout:
         return []
 
     containers: list[ServiceInfo] = []
-    for line in stdout.split("\n"):
+    for line in stdout.splitlines():
         if not line.strip():
             continue
         parts = line.split("\t")
@@ -156,6 +151,7 @@ def get_docker_containers(filter_names: list[str] | None = None) -> list[Service
 
         cid, name, status_text, state, image = parts[:5]
 
+        # If a filter list was given, skip containers not in it
         if filter_names and name not in filter_names:
             continue
 
@@ -167,9 +163,10 @@ def get_docker_containers(filter_names: list[str] | None = None) -> list[Service
 
         memory = 0
         if state == "running":
-            _, mem_out, _ = _run_cmd([
-                "docker", "stats", "--no-stream", "--format", "{{.MemUsage}}", cid
-            ])
+            _, mem_out, _ = _run_cmd(
+                ["docker", "stats", "--no-stream", "--format", "{{.MemUsage}}", cid],
+                timeout=8,
+            )
             if mem_out:
                 try:
                     used_str = mem_out.split("/")[0].strip()
@@ -204,14 +201,12 @@ def control_docker_container(container_name: str, action: str) -> ServiceControl
 
 
 def get_docker_logs(container_name: str, lines: int = 50) -> list[str]:
-    """Return the last *lines* log entries for a docker container."""
     code, stdout, stderr = _run_cmd(
         ["docker", "logs", "--tail", str(lines), container_name],
         timeout=10,
     )
     if code != 0:
         return [stderr] if stderr else []
-    # docker logs writes to stderr by default; combine both
     combined = stdout + ("\n" + stderr if stderr else "")
     return [ln for ln in combined.splitlines() if ln.strip()]
 
@@ -237,9 +232,9 @@ def get_nohup_service_status(name: str, keyword: str) -> ServiceInfo:
                 mem = proc.info.get("memory_info")
                 create_time = proc.info.get("create_time", 0)
                 uptime_sec = int(time.time() - create_time) if create_time else 0
-                days = uptime_sec // 86400
-                hours = (uptime_sec % 86400) // 3600
-                mins = (uptime_sec % 3600) // 60
+                days, remainder = divmod(uptime_sec, 86400)
+                hours, mins = divmod(remainder, 3600)
+                mins //= 60
 
                 info["status"] = "active"
                 info["pid"] = proc.info["pid"]
@@ -269,7 +264,6 @@ def control_nohup_service(name: str, keyword: str, action: str) -> ServiceContro
         return ServiceControlResponse(success=False, message=f"Process '{name}' not found")
 
     if action == "restart":
-        # Stop existing process first, then let external supervisor restart it
         stop_result = control_nohup_service(name, keyword, "stop")
         if not stop_result.success:
             return ServiceControlResponse(
@@ -288,6 +282,7 @@ def control_nohup_service(name: str, keyword: str, action: str) -> ServiceContro
 
 
 def _discover_nohup_processes() -> list[ServiceInfo]:
+    """Auto-discover user-level daemon processes (ppid=1, uid>=1000)."""
     result: list[ServiceInfo] = []
     for proc in ps.process_iter(["pid", "ppid", "name", "cmdline", "memory_info", "create_time", "uids"]):
         try:
@@ -313,7 +308,7 @@ def _discover_nohup_processes() -> list[ServiceInfo]:
             result.append(ServiceInfo(
                 name=proc.info.get("name", cmdline_list[0]),
                 type="nohup",
-                description=cmdline,
+                description=cmdline[:120],
                 status="active",
                 uptime=f"{days}d {hours}h {mins}m",
                 memory=mem.rss if mem else 0,
@@ -328,10 +323,31 @@ def _discover_nohup_processes() -> list[ServiceInfo]:
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def _collect_all_services_sync() -> list[ServiceInfo]:
+    """
+    Collect service status using ONLY the configured service lists from settings.
+    Never tries to auto-enumerate all systemd units (systemctl list-units),
+    which fails in Docker/non-systemd environments.
+    """
+    from app.config import get_settings
+    settings = get_settings()
+
     services: list[ServiceInfo] = []
-    services.extend(_get_systemd_services_batch())
-    services.extend(get_docker_containers())
-    services.extend(_discover_nohup_processes())
+
+    # 1. Systemd — check each configured service individually
+    if settings.systemd_service_list:
+        services.extend(_get_configured_systemd_services(settings.systemd_service_list))
+
+    # 2. Docker — use configured list; if empty, auto-discover all containers
+    filter_names = settings.docker_container_list if settings.docker_container_list else None
+    services.extend(get_docker_containers(filter_names))
+
+    # 3. Nohup — use configured list; if empty, auto-discover user daemons
+    if settings.nohup_service_list:
+        for svc in settings.nohup_service_list:
+            services.append(get_nohup_service_status(svc["name"], svc["keyword"]))
+    else:
+        services.extend(_discover_nohup_processes())
+
     return services
 
 
@@ -343,22 +359,36 @@ async def get_all_services() -> list[ServiceInfo]:
 async def control_service(
     service_name: str, action: str, service_type: str | None = None
 ) -> ServiceControlResponse:
+    from app.config import get_settings
+    settings = get_settings()
+
+    # Auto-detect type if not provided
     if service_type is None:
-        code, _, _ = _run_cmd(["systemctl", "cat", f"{service_name}.service"], timeout=5)
-        if code == 0:
-            service_type = "systemd"
-        else:
+        systemctl = _systemctl_path()
+        if systemctl:
+            code, _, _ = _run_cmd([systemctl, "cat", f"{service_name}.service"], timeout=5)
+            if code == 0:
+                service_type = "systemd"
+
+        if service_type is None and _docker_available():
             containers = get_docker_containers()
             if any(c.name == service_name for c in containers):
                 service_type = "docker"
-            else:
-                service_type = "nohup"
+
+        if service_type is None:
+            service_type = "nohup"
 
     if service_type == "systemd":
         return control_systemd_service(service_name, action)
     elif service_type == "docker":
         return control_docker_container(service_name, action)
     elif service_type == "nohup":
-        return control_nohup_service(service_name, service_name, action)
+        # Look up keyword from config
+        keyword = service_name
+        for svc in settings.nohup_service_list:
+            if svc["name"] == service_name:
+                keyword = svc["keyword"]
+                break
+        return control_nohup_service(service_name, keyword, action)
     else:
-        return ServiceControlResponse(success=False, message=f"Unknown service: {service_name}")
+        return ServiceControlResponse(success=False, message=f"Unknown service type: {service_type}")

@@ -23,6 +23,8 @@ class DiskPartition(BaseModel):
     used: int
     free: int
     percent: float
+    disk_type: str = "unknown"  # "ssd", "hdd", "unknown"
+    label: str = ""             # Model name or disk identifier shown in UI
 
 
 class NetworkStatus(BaseModel):
