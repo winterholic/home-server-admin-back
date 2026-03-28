@@ -1,9 +1,12 @@
 import asyncio
+import logging
 import subprocess
 import shutil
 import time
 import psutil as ps
 from app.schemas.service import ServiceInfo, ServiceControlResponse
+
+logger = logging.getLogger(__name__)
 
 
 def _run_cmd(cmd: list[str], timeout: int = 10) -> tuple[int, str, str]:
@@ -18,13 +21,20 @@ def _run_cmd(cmd: list[str], timeout: int = 10) -> tuple[int, str, str]:
 
 # ── Systemd (batched) ──────────────────────────────────────────────────────────
 
+def _systemctl_path() -> str:
+    """Return the full path to systemctl, falling back to bare name."""
+    return shutil.which("systemctl") or "systemctl"
+
+
 def _get_systemd_services_batch() -> list[ServiceInfo]:
     """Return all systemd service statuses using at most 2 systemctl calls."""
-    code, stdout, _ = _run_cmd([
-        "systemctl", "list-units", "--type=service",
+    systemctl = _systemctl_path()
+    code, stdout, stderr = _run_cmd([
+        systemctl, "list-units", "--type=service",
         "--all", "--no-pager", "--plain", "--no-legend",
     ])
     if code != 0 or not stdout:
+        logger.warning("systemctl list-units failed (code=%d): %s", code, stderr)
         return []
 
     service_units: list[str] = []
@@ -34,6 +44,7 @@ def _get_systemd_services_batch() -> list[ServiceInfo]:
             service_units.append(parts[0])
 
     if not service_units:
+        logger.warning("systemctl list-units returned no .service units")
         return []
 
     # Batch into chunks to avoid arg-list-too-long errors (ARG_MAX)
@@ -42,11 +53,12 @@ def _get_systemd_services_batch() -> list[ServiceInfo]:
     props_str = "Id,ActiveState,MainPID,MemoryCurrent,Description,ActiveEnterTimestamp"
     for i in range(0, len(service_units), CHUNK):
         chunk = service_units[i:i + CHUNK]
-        code, stdout, _ = _run_cmd(
-            ["systemctl", "show", "--no-pager", f"--property={props_str}"] + chunk,
+        code, stdout, stderr = _run_cmd(
+            [systemctl, "show", "--no-pager", f"--property={props_str}"] + chunk,
             timeout=15,
         )
         if code != 0:
+            logger.warning("systemctl show failed (code=%d): %s", code, stderr)
             continue
         services.extend(_parse_show_output(stdout))
 

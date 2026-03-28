@@ -47,15 +47,14 @@ def collect_system_status() -> SystemStatusResponse:
     swap = psutil.swap_memory()
 
     disks = []
-    seen_devices: set[str] = set()
-    for part in psutil.disk_partitions(all=False):
+    seen_mountpoints: set[str] = set()
+    for part in psutil.disk_partitions(all=True):
         if not _is_real_partition(part):
             continue
-        # Deduplicate by device path to avoid showing same physical disk twice
-        device_key = part.device.split('/')[-1] if '/' in part.device else part.device
-        if device_key in seen_devices:
+        # Deduplicate by mountpoint
+        if part.mountpoint in seen_mountpoints:
             continue
-        seen_devices.add(device_key)
+        seen_mountpoints.add(part.mountpoint)
         try:
             usage = psutil.disk_usage(part.mountpoint)
             disks.append(DiskPartition(
@@ -67,7 +66,7 @@ def collect_system_status() -> SystemStatusResponse:
                 free=usage.free,
                 percent=usage.percent,
             ))
-        except PermissionError:
+        except (PermissionError, OSError):
             continue
 
     net = psutil.net_io_counters()

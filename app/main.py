@@ -125,6 +125,7 @@ async def lifespan(app: FastAPI):
     await seed_default_alert_settings()
 
     interval = settings.monitor_interval
+    now = datetime.utcnow()
 
     scheduler.add_job(
         scheduled_monitoring_task,
@@ -132,6 +133,7 @@ async def lifespan(app: FastAPI):
         seconds=interval,
         id="monitoring",
         name="System Monitoring",
+        next_run_time=now,
     )
     scheduler.add_job(
         scheduled_log_task,
@@ -139,6 +141,7 @@ async def lifespan(app: FastAPI):
         seconds=interval,
         id="log_collection",
         name="Log Collection",
+        next_run_time=now,
     )
     scheduler.add_job(
         scheduled_alert_task,
@@ -146,6 +149,7 @@ async def lifespan(app: FastAPI):
         seconds=interval,
         id="alert_check",
         name="Alert Check",
+        next_run_time=now,
     )
     # Cleanup runs once a day at 03:00
     scheduler.add_job(
