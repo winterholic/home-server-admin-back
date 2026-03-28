@@ -13,7 +13,9 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
+ACCESS_TOKEN_EXPIRE_MINUTES = 15    # Short-lived: rotate via refresh token
+REFRESH_TOKEN_EXPIRE_DAYS = 30
+REFRESH_COOKIE_NAME = "nodectrl_refresh"
 
 
 def verify_password(plain: str, hashed: str) -> bool:
@@ -24,10 +26,29 @@ def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
 
-def create_access_token(data: dict, expires_minutes: int = ACCESS_TOKEN_EXPIRE_MINUTES) -> str:
+def create_access_token(data: dict) -> str:
     to_encode = data.copy()
-    to_encode["exp"] = datetime.utcnow() + timedelta(minutes=expires_minutes)
+    to_encode["exp"] = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode["type"] = "access"
     return jwt.encode(to_encode, get_settings().secret_key, algorithm=ALGORITHM)
+
+
+def create_refresh_token(data: dict) -> str:
+    to_encode = data.copy()
+    to_encode["exp"] = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    to_encode["type"] = "refresh"
+    return jwt.encode(to_encode, get_settings().secret_key, algorithm=ALGORITHM)
+
+
+def decode_refresh_token(token: str) -> str | None:
+    """Decode a refresh JWT and return the username (sub), or None if invalid."""
+    try:
+        payload = jwt.decode(token, get_settings().secret_key, algorithms=[ALGORITHM])
+        if payload.get("type") != "refresh":
+            return None
+        return payload.get("sub")
+    except JWTError:
+        return None
 
 
 async def get_current_user(
@@ -41,6 +62,8 @@ async def get_current_user(
     )
     try:
         payload = jwt.decode(token, get_settings().secret_key, algorithms=[ALGORITHM])
+        if payload.get("type") != "access":
+            raise exc
         username: str | None = payload.get("sub")
         if username is None:
             raise exc
