@@ -1,7 +1,7 @@
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, delete
@@ -9,6 +9,8 @@ from sqlalchemy import select, delete
 from app.config import get_settings
 from app.database import init_db, AsyncSessionLocal
 from app.routers import system, services, logs, alerts, dashboard, settings as settings_router
+from app.routers import auth as auth_router
+from app.auth import get_current_user
 from app.services.monitor import save_monitoring_snapshot
 from app.services.log_analyzer import collect_and_save_logs
 from app.services.notification import check_alerts
@@ -188,12 +190,17 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    app.include_router(system.router)
-    app.include_router(services.router)
-    app.include_router(logs.router)
-    app.include_router(alerts.router)
-    app.include_router(dashboard.router)
-    app.include_router(settings_router.router)
+    # Auth router — public (no auth required)
+    app.include_router(auth_router.router)
+
+    # All other routers require authentication
+    _auth_dep = [Depends(get_current_user)]
+    app.include_router(system.router, dependencies=_auth_dep)
+    app.include_router(services.router, dependencies=_auth_dep)
+    app.include_router(logs.router, dependencies=_auth_dep)
+    app.include_router(alerts.router, dependencies=_auth_dep)
+    app.include_router(dashboard.router, dependencies=_auth_dep)
+    app.include_router(settings_router.router, dependencies=_auth_dep)
 
     @app.get("/api/health")
     async def health_check():
